@@ -45,7 +45,7 @@ realpath() {
 install_dotfiles() {
     log "installing dotfiles..."
 
-    find "${DOTFILES_DIR}" -type f  | while read -r file; do
+    find "${DOTFILES_DIR}" -type f -not -path "*/.git/*"  | while read -r file; do
         local rel_path="${file#"${DOTFILES_DIR}"/}"
         local target="${HOME}/${rel_path}"
         local target_dir
@@ -77,7 +77,7 @@ install_dotfiles() {
 uninstall_dotfiles() {
     log "uninstalling dotfiles..."
 
-    find "${DOTFILES_DIR}" -type f | while read -r file; do
+    find "${DOTFILES_DIR}" -type f -not -path "*/.git/*" | while read -r file; do
         local rel_path="${file#"${DOTFILES_DIR}"/}"
         local target="${HOME}/${rel_path}"
 
@@ -104,11 +104,11 @@ uninstall_dotfiles() {
 }
 
 list_dotfiles() {
-    (cd "${DOTFILES_DIR}" && find . -type f | sed 's|^\./||' | sort)
+    (cd "${DOTFILES_DIR}" && find . -type f -not -path "./.git/*" | sed 's|^\./||' | sort)
 }
 
 status_dotfiles () {
-    find "${DOTFILES_DIR}" -type f | while read -r file; do
+    find "${DOTFILES_DIR}" -type f -not -path "*/.git/*" | while read -r file; do
         local rel_path="${file#"${DOTFILES_DIR}"/}"
         local target="${HOME}/${rel_path}"
 
@@ -291,7 +291,7 @@ auto_commit() {
 sync_to_dotfiles(){
     log "syncing changes from home to dotfiles..."
 
-    find "${DOTFILES_DIR}" -type f | while read -r file; do
+    find "${DOTFILES_DIR}" -type f -not -path "*/.git/*" | while read -r file; do
         local rel_path="${file#"${DOTFILES_DIR}"/}"
         local source="${HOME}/${rel_path}"
 
