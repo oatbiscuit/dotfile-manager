@@ -46,6 +46,7 @@ Commands:
     restore                     - Restore backed up files.
     sync                        - Sync changes between home and dotfiles repo.
     save                        - Commit changes to git.
+    config                      - Shows config.
 
 Git Commands:
     git-init                    - Initialise git repository.
@@ -57,6 +58,7 @@ Git Commands:
     git-diff [options]          - Show differences.
 
 Options:
+    [--dry-run] [-n]            - Preview changes without executing.
     [--help] [-h]               - Show this help.
     [--version] [-v]            - Show version information.
 ```
