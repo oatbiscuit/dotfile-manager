@@ -5,9 +5,19 @@
 # Dotfiles Manager
 # Copyright (c) 2026 oatbiscuit
 # License: MIT (see LICENSE file or https://opensource.org/licenses/MIT)
-# version: 0.3.0
+# version: 0.4.0
 
 set -euo pipefail
+
+if [[ -t 2 ]] && command -v tput >/dev/null 2>&1; then
+    RED=$(tput setaf 1)
+    GREEN=$(tput setaf 2)
+    YELLOW=$(tput setaf 3)
+    BLUE=$(tput setaf 4)
+    NC=$(tput sgr0)
+else
+    RED=""; GREEN=""; YELLOW=""; BLUE=""; NC=""
+fi
 
 XDG_DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
@@ -24,20 +34,20 @@ DRY_RUN="${DRY_RUN:-false}"
 mkdir -p "${BACKUP_DIR}" 2>/dev/null || true
 
 log() {
-    echo "-> ${1}" >&2
+    echo "${GREEN}->${NC} ${1}" >&2
 }
 
 war() {
-    echo "-> [warning] ${1}" >&2
+    echo "${YELLOW}-> [warning]${NC} ${1}" >&2
 }
 
 die() {
-    echo "-> [error] ${1}" >&2
+    echo "${RED}-> [error]${NC} ${1}" >&2
     exit 1
 }
 
 dry() {
-    echo "-> [dry-run] ${1}" >&2
+    echo "${BLUE}-> [dry-run]${NC} ${1}" >&2
 }
 
 run() {
@@ -63,7 +73,15 @@ realpath() {
         readlink "${path}"
     else
         if [[ -e "${path}" ]]; then
-            (cd "$(dirname "${path}")" && echo "$(pwd)/$(basename "${path}")") || echo "${path}"
+            local dir
+            dir=$(dirname "${path}")
+            if cd "${dir}" 2>/dev/null; then
+                local working_dir
+                working_dir=$(pwd)
+                echo "${working_dir}/$(basename "${path}")"
+            else
+                echo "${path}"
+            fi
         else
             echo "${path}"
             return 1
@@ -83,8 +101,12 @@ install_dotfiles() {
 
         run mkdir -p "${target_dir}"
 
-        if [[ -L "${target}" ]] && [[ "$(readlink "${target}")" = "${file}" ]]; then
-            log "already linked: ${rel_path}."
+        if [[ -L "${target}" ]]; then
+            local link_target
+            link_target=$(readlink "${target}")
+            if [[ "${link_target}" = "${file}" ]]; then
+                log "already linked: ${rel_path}."
+            fi
         elif [[ -e "${target}" ]]; then
             war "backing up existing file: ${rel_path}."
             local backup_path
@@ -133,7 +155,7 @@ uninstall_dotfiles() {
 }
 
 list_dotfiles() {
-    (cd "${DOTFILES_DIR}" && find . -type f -not -path "./.git/*" | sed "s|^\./||" | sort)
+    (cd "${DOTFILES_DIR}" && find . -type f -not -path "./.git/*" | sed 's|^\./||' | sort)
 }
 
 status_dotfiles() {
@@ -142,7 +164,9 @@ status_dotfiles() {
         local target="${HOME}/${rel_path}"
 
         if [[ -L "${target}" ]]; then
-            if [[ "$(realpath "${target}")" = "${file}" ]]; then
+            local real_target
+            real_target=$(realpath "${target}")
+            if [[ "${real_target}" = "${file}" ]]; then
                 log "linked: ${rel_path}."
             else
                 log "symlink points elsewhere: ${rel_path}."
@@ -164,8 +188,12 @@ add_dotfile() {
         die "file not found: ${source}."
     fi
 
-    if [[ -L "${source}" ]] && [[ "$(realpath "${source}")" = "${target}" ]]; then
-        die "file is already managed by dotfiles (symlink exists): ${file}."
+    if [[ -L "${source}" ]]; then
+        local real_source
+        real_source=$(realpath "${source}")
+        if [[ "${real_source}" = "${target}" ]]; then
+            die "file is already managed by dotfiles (symlink exists): ${file}."
+        fi
     fi
 
     if [[ -e "${target}" ]] || [[ -L "${target}" ]]; then
@@ -337,44 +365,29 @@ auto_commit() {
     fi
 }
 
-sync_to_dotfiles() {
-    log "syncing changes from home to dotfiles..."
-
-    find "${DOTFILES_DIR}" -type f -not -path "*/.git/*" -print0 | while IFS= read -r -d '' file; do
-        local rel_path="${file#"${DOTFILES_DIR}"/}"
-        local source="${HOME}/${rel_path}"
-
-        if [[ ! -e "${source}" ]]; then
-            war "home file missing: ${rel_path} (skipping)"
-            continue
-        fi
-
-        if [[ -f "${source}" ]]; then
-            if [[ -L "${source}" ]]; then
-                run cp "$(realpath "${source}")" "${file}"
-            else
-                run cp "${source}" "${file}"
-            fi
-            log "synced: ${rel_path}"
-        fi
-    done
-
-    log "sync complete."
-    auto_commit "sync from home"
-}
-
 show_config() {
+    local managed_count
+    managed_count=$(list_dotfiles | wc -l)
+    local backup_count
+    backup_count=$(find "${BACKUP_DIR}" -type f 2>/dev/null | wc -l)
+    local git_repo
+    if [[ -d "${DOTFILES_DIR}"/.git ]]; then
+        git_repo="${GREEN}yes${NC}"
+    else
+        git_repo="${RED}no${NC}"
+    fi
+
     cat << EOF
-Dotfiles Manager Configuration:
+${GREEN}->${NC} Dotfiles Manager Configuration:
     DOTFILES_DIR:       ${DOTFILES_DIR}
     BACKUP_DIR:         ${BACKUP_DIR}
     GIT_REMOTE:         ${GIT_REMOTE:-not set}
     XDG_CONFIG_HOME:    ${XDG_CONFIG_HOME}
     XDG_STATE_HOME:     ${XDG_STATE_HOME}
 
-Managed files:  $(list_dotfiles | wc -l)
-Backup count:   $(find "${BACKUP_DIR}" -type f 2>/dev/null | wc -l)
-Git repo:       $([[ -d "${DOTFILES_DIR}"/.git ]] && echo "yes" || echo "no")
+Managed files:  ${GREEN}${managed_count}${NC}
+Backup count:   ${GREEN}${backup_count}${NC}
+Git repo:       ${git_repo}
 EOF
 }
 
@@ -428,7 +441,7 @@ EOF
 }
 
 version() {
-    echo "dotfiles version 0.3.0"
+    echo "dotfiles version 0.4.0"
 }
 
 args() {
@@ -502,13 +515,11 @@ args() {
 
         sync)
             if [[ "${DRY_RUN}" = "true" ]]; then
-                dry "full sync cycle (git_pull -> sync_to_dotfiles -> git_push -> install_dotfiles)"
-                sync_to_dotfiles
+                dry "full sync cycle (git_pull-> install_dotfiles -> git_push)"
             else
                 git_pull
-                sync_to_dotfiles
-                git_push
                 install_dotfiles
+                git_push
             fi
         ;;
         h|help) help;;
