@@ -5,7 +5,7 @@
 # Dotfiles Manager
 # Copyright (c) 2026 oatbiscuit
 # License: MIT (see LICENSE file or https://opensource.org/licenses/MIT)
-# version: 0.1.1
+# version: 0.3.0
 
 set -euo pipefail
 
@@ -18,6 +18,8 @@ DOTFILES_DIR="${DOTFILES_DIR:-${HOME}/.dotfiles}"
 BACKUP_DIR="${BACKUP_DIR:-${XDG_STATE_HOME}/dotfiles-backup}"
 
 GIT_REMOTE="${GIT_REMOTE:-}"
+
+DRY_RUN="${DRY_RUN:-false}"
 
 mkdir -p "${BACKUP_DIR}" 2>/dev/null || true
 
@@ -32,6 +34,26 @@ war() {
 die() {
     echo "-> [error] ${1}" >&2
     exit 1
+}
+
+dry() {
+    echo "-> [dry-run] ${1}" >&2
+}
+
+run() {
+    if [[ ${DRY_RUN} = "true" ]]; then
+        local cmd_str=""
+        for arg in "${@}"; do
+            if [[ "${arg}" =~ [[:space:]] ]]; then
+                cmd_str="${cmd_str} '${arg//\'/\\\'}'"
+            else
+                cmd_str="${cmd_str} ${arg}"
+            fi
+        done
+        dry "${cmd_str# }"
+    else
+        "${@}"
+    fi
 }
 
 realpath() {
@@ -59,7 +81,7 @@ install_dotfiles() {
 
         target_dir="$(dirname "${target}")"
 
-        mkdir -p "${target_dir}"
+        run mkdir -p "${target_dir}"
 
         if [[ -L "${target}" ]] && [[ "$(readlink "${target}")" = "${file}" ]]; then
             log "already linked: ${rel_path}."
@@ -68,12 +90,12 @@ install_dotfiles() {
             local backup_path
 
             backup_path="${BACKUP_DIR}/$(dirname "${rel_path}")"
-            mkdir -p "${backup_path}"
-            mv "${target}" "${BACKUP_DIR}/${rel_path}"
-            ln -s "${file}" "${target}"
+            run mkdir -p "${backup_path}"
+            run mv "${target}" "${BACKUP_DIR}/${rel_path}"
+            run ln -s "${file}" "${target}"
             log "linked (backed up): ${rel_path}."
         else
-            ln -s "${file}" "${target}"
+            run ln -s "${file}" "${target}"
             log "linked: ${rel_path}."
         fi
     done
@@ -93,12 +115,12 @@ uninstall_dotfiles() {
             link_target="$(readlink "${target}")"
 
             if [[ "${link_target}" = "${file}" ]]; then
-                rm "${target}"
+                run rm "${target}"
                 log "removed symlink: ${rel_path}."
 
                 local target_dir
                 target_dir="$(dirname "${target}")"
-                rmdir "${target_dir}" 2>/dev/null || true
+                run rmdir "${target_dir}" 2>/dev/null || true
             else
                 log "skipping: ${rel_path} (symlink points elsewhere)."
             fi
@@ -114,8 +136,8 @@ list_dotfiles() {
     (cd "${DOTFILES_DIR}" && find . -type f -not -path "./.git/*" | sed "s|^\./||" | sort)
 }
 
-status_dotfiles () {
-    find "${DOTFILES_DIR}" -type f -not -path "*/.git/*" | while read -r file; do
+status_dotfiles() {
+    find "${DOTFILES_DIR}" -type f -not -path "*/.git/*" -print0 | while IFS= read -r -d '' file; do
         local rel_path="${file#"${DOTFILES_DIR}"/}"
         local target="${HOME}/${rel_path}"
 
@@ -148,24 +170,28 @@ add_dotfile() {
 
     if [[ -e "${target}" ]] || [[ -L "${target}" ]]; then
         war "file already exists in dotfiles: ${file}"
-        read -p "overwrite? [y/N] " -r
-        if [[ ! "${REPLY}" =~ ^[Yy]$ ]]; then
-            log aborted
-            return
+        if [[ "${DRY_RUN}" != "true" ]]; then
+            read -p "overwrite? [y/N] " -r
+            if [[ ! "${REPLY}" =~ ^[Yy]$ ]]; then
+                log aborted
+                return
+            fi
+        else
+            dry "would prompt to overwrite ${file} (assuming yes)"
         fi
-        rm -f "${target}"
+        run rm -f "${target}"
     fi
 
-    mkdir -p "$(dirname "${target}")"
+    run mkdir -p "$(dirname "${target}")"
 
     if [[ -L "${source}" ]]; then
         local real_source
         real_source="$(realpath "${source}")"
 
         log "copying from symlink target: ${real_source}."
-        cp -f "${real_source}" "${target}"
+        run cp -f "${real_source}" "${target}"
     else
-        cp "${source}" "${target}"
+        run cp "${source}" "${target}"
     fi
 
     log "added: ${file} to dotfiles."
@@ -180,12 +206,12 @@ remove_dotfile() {
         die "dotfile not found: ${target}."
     fi
 
-    rm -f "${target}"
+    run rm -f "${target}"
     log "removed: ${file} from dotfiles."
     auto_commit "removed: ${file}"
 }
 
-restore_backup () {
+restore_backup() {
     if [[ ! -d "${BACKUP_DIR}" ]]; then
         die "no backup directory found at: ${BACKUP_DIR}."
     fi
@@ -200,10 +226,14 @@ restore_backup () {
 
     log "found ${file_count} backed up files."
     war "this will overwrite any existing files in your home directory."
-    read -p "continue? [y/N] " -r
-    if [[ ! ${REPLY} =~ ^[Yy]$ ]]; then
-        log "restore aborted."
-        return
+    if [[ "${DRY_RUN}" != "true" ]]; then
+        read -p "continue? [y/N] " -r
+        if [[ ! ${REPLY} =~ ^[Yy]$ ]]; then
+            log "restore aborted."
+            return
+        fi
+    else
+        dry "would prompt for confirmation (assuming yes)"
     fi
 
     find "${BACKUP_DIR}" -type f | while read -r backup_file; do
@@ -211,13 +241,13 @@ restore_backup () {
         local original_dir
         original_dir="$(dirname "${original_path}")"
 
-        mkdir -p "${original_dir}"
+        run mkdir -p "${original_dir}"
 
         if [[ -e "${original_path}" ]]; then
             war "overwriting: ${original_path}."
         fi
 
-        cp "${backup_file}" "${original_path}"
+        run cp "${backup_file}" "${original_path}"
         log "restored: ${original_path}."
     done
 
@@ -287,22 +317,30 @@ git_commit() {
     check_git
     local message="${1:-update dotfiles}"
 
-    (cd "${DOTFILES_DIR}" && git add . && git commit -m "${message}")
-    log "committed: ${message}"
+    if [[ "${DRY_RUN}" = "true" ]]; then
+        dry "git add . && git commit -m ${message}"
+    else
+        (cd "${DOTFILES_DIR}" && git add . && git commit -m "${message}")
+        log "committed: ${message}"
+    fi
 }
 
 auto_commit() {
     local message="${1}"
 
-    if [[ -d "${DOTFILES_DIR}/.git" ]]; then
-        (cd "${DOTFILES_DIR}" && git add . && git commit -m "${message}" 2>/dev/null || true)
+    if [[ "${DRY_RUN}" = "true" ]]; then
+        dry "git add . && git commit -m ${message}"
+    else
+        if [[ -d "${DOTFILES_DIR}/.git" ]]; then
+            (cd "${DOTFILES_DIR}" && git add . && git commit -m "${message}" 2>/dev/null || true)
+        fi
     fi
 }
 
-sync_to_dotfiles(){
+sync_to_dotfiles() {
     log "syncing changes from home to dotfiles..."
 
-    find "${DOTFILES_DIR}" -type f -not -path "*/.git/*" | while read -r file; do
+    find "${DOTFILES_DIR}" -type f -not -path "*/.git/*" -print0 | while IFS= read -r -d '' file; do
         local rel_path="${file#"${DOTFILES_DIR}"/}"
         local source="${HOME}/${rel_path}"
 
@@ -313,9 +351,9 @@ sync_to_dotfiles(){
 
         if [[ -f "${source}" ]]; then
             if [[ -L "${source}" ]]; then
-                cp "$(realpath "${source}")" "${file}"
+                run cp "$(realpath "${source}")" "${file}"
             else
-                cp "${source}" "${file}"
+                run cp "${source}" "${file}"
             fi
             log "synced: ${rel_path}"
         fi
@@ -382,6 +420,7 @@ Git Commands:
     git-diff [options]          - Show differences.
 
 Options:
+    [--dry-run] [-n]            - Preview changes without executing.
     [--help] [-h]               - Show this help.
     [--version] [-v]            - Show version information.
 
@@ -389,7 +428,7 @@ EOF
 }
 
 version() {
-    echo "dotfiles version 0.1.1"
+    echo "dotfiles version 0.3.0"
 }
 
 args() {
@@ -398,8 +437,39 @@ args() {
         die "no command specified"
     fi
 
-    action="${1}"
-    shift
+    local action=""
+    local action_args=()
+
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            --dry-run|-n)
+                DRY_RUN="true"
+                shift
+            ;;
+            --help|-h)
+                help
+                exit 0
+            ;;
+            --version|-v)
+                version
+                exit 0
+            ;;
+            *)
+                if [[ -z "${action}" ]]; then
+                    action="${1}"
+                    shift
+                else
+                    action_args+=("${1}")
+                    shift
+                fi
+            ;;
+        esac
+    done
+
+    if [[ -z "${action}" ]]; then
+        help
+        die "no command specified."
+    fi
 
     case "${action}" in
         i|install) install_dotfiles ;;
@@ -407,37 +477,42 @@ args() {
         l|list) list_dotfiles ;;
         s|status) status_dotfiles ;;
         a|add)
-            if [[ $# -eq 0 ]]; then
+            if [[ ${#action_args[@]} -eq 0 ]]; then
                 die "missing argument." "usage: ./dotfiles add <file>"
             fi
-            add_dotfile "${1}"
+            add_dotfile "${action_args[0]}"
         ;;
         rm|remove)
-            if [[ $# -eq 0 ]]; then
+            if [[ ${#action_args[@]} -eq 0 ]]; then
                 die "missing argument." "usage: ./dotfiles remove <file>"
             fi
-            remove_dotfile "${1}"
+            remove_dotfile "${action_args[0]}"
         ;;
         r|restore) restore_backup ;;
         config) show_config ;;
 
         git-init) git_init ;;
         git-status) git_status ;;
-        git-log) git_log "${@}" ;;
-        git-push) git_push "${@}" ;;
-        git-pull) git_pull "${@}" ;;
-        git-remote) git_remote "${@}" ;;
-        git-diff) git_diff "${@}" ;;
-        git-commit|commit|save) git_commit "${2:-save dotfiles}" ;;
+        git-log) git_log "${action_args[@]}" ;;
+        git-push) git_push "${action_args[@]}" ;;
+        git-pull) git_pull "${action_args[@]}" ;;
+        git-remote) git_remote "${action_args[@]}" ;;
+        git-diff) git_diff "${action_args[@]}" ;;
+        git-commit|commit|save) git_commit "${action_args[0]:-save dotfiles}" ;;
 
         sync)
-            git_pull
-            sync_to_dotfiles
-            git_push
-            install_dotfiles
+            if [[ "${DRY_RUN}" = "true" ]]; then
+                dry "full sync cycle (git_pull -> sync_to_dotfiles -> git_push -> install_dotfiles)"
+                sync_to_dotfiles
+            else
+                git_pull
+                sync_to_dotfiles
+                git_push
+                install_dotfiles
+            fi
         ;;
-        h|help|--help|-h) help;;
-        v|version|--version|-v) version ;;
+        h|help) help;;
+        v|version) version ;;
         *)
             help
             die "unknown command: ${action}."
