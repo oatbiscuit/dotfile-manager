@@ -528,7 +528,7 @@ args() {
         git-init) git_init ;;
         git-status) git_status ;;
         git-log) git_log "${action_args[@]}" ;;
-        git-push) ;;
+        git-push) git_push ;;
         git-pull) git_pull "${action_args[@]}" ;;
         git-remote) git_remote "${action_args[@]}" ;;
         git-diff) git_diff "${action_args[@]}" ;;
