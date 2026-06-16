@@ -3,7 +3,7 @@
 # Dotfiles Manager
 # Copyright (c) 2026 oatbiscuit
 # License: MIT (see LICENSE file or https://opensource.org/licenses/MIT)
-# version: 0.4.0
+# version: 0.4.1
 
 set -euo pipefail
 
@@ -24,51 +24,32 @@ XDG_STATE_HOME="${XDG_STATE_HOME:-${HOME}/.local/state}"
 
 DOTFILES_DIR="${DOTFILES_DIR:-${HOME}/.dotfiles}"
 BACKUP_DIR="${BACKUP_DIR:-${XDG_STATE_HOME}/dotfiles-backup}"
-
 DRY_RUN="${DRY_RUN:-false}"
 
 mkdir -p "${BACKUP_DIR}"
 
-log() {
-    echo "${GREEN}->${NC} ${1}" >&2
-}
-
-war() {
-    echo "${YELLOW}-> [warning]${NC} ${1}" >&2
-}
-
-die() {
-    echo "${RED}-> [error]${NC} ${1}" >&2
-    exit 1
-}
-
-dry() {
-    echo "${BLUE}-> [dry-run]${NC} ${1}" >&2
-}
+log() { echo "${GREEN}->${NC} ${1}" >&2; }
+warn() { echo "${YELLOW}-> [warning]${NC} ${1}" >&2; }
+die() { echo "${RED}-> [error]${NC} ${1}" >&2; exit 1; }
+dry() { echo "${BLUE}-> [dry-run]${NC} ${1}" >&2; }
 
 run() {
     if [[ ${DRY_RUN} = "true" ]]; then
-        local cmd_str=""
-        for arg in "${@}"; do
-            if [[ "${arg}" =~ [[:space:]] ]]; then
-                cmd_str="${cmd_str} '${arg//\'/\\\'}'"
-            else
-                cmd_str="${cmd_str} ${arg}"
-            fi
-        done
-        dry "${cmd_str# }"
+        local cmd_str
+        printf -v cmd_str '%q ' "${@}"
+        dry "${cmd_str% }"
     else
         "${@}"
     fi
 }
 
-realpath() {
+resolve_path() {
     if command -v realpath >/dev/null 2>&1; then
         command realpath -- "${1}" 2>/dev/null
-    elif command -v readlink >/dev/null 2>&1; then
-        command readlink -f -- "${1}"
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "${1}"
     else
-        die "realpath/readlink not available."
+        die "realpath not available."
     fi
 }
 
@@ -78,7 +59,7 @@ install_dotfiles() {
 
     log "installing dotfiles..."
 
-    find "${DOTFILES_DIR}" -type f -not -path "*/.git/*" -print0 | while IFS= read -r -d '' file; do
+    while IFS= read -r -d '' file; do
         local rel_path="${file#"${DOTFILES_DIR}"/}"
         local target="${HOME}/${rel_path}"
         local target_dir
@@ -90,32 +71,32 @@ install_dotfiles() {
         run mkdir -p "${target_dir}"
 
         if [[ -L "${target}" ]]; then
-            if [[ "$(realpath "${target}")" = "$(realpath "${file}")" ]]; then
+            if [[ "$(resolve_path "${target}")" = "$(resolve_path "${file}")" ]]; then
                 log "already linked: ${rel_path}."
                 continue
             fi
 
-            war "symlink points elsewhere: ${rel_path}."
+            warn "symlink points elsewhere: ${rel_path}."
 
             run mkdir -p "$(dirname "${backup_path}")"
             run mv "${target}" "${backup_path}"
 
-            run ln -s "${file}" "${target}"
+            run ln -sfn "${file}" "${target}"
 
             log "relinked: ${rel_path}"
         elif [[ -e "${target}" ]]; then
-            war "backing up existing file: ${rel_path}."
+            warn "backing up existing file: ${rel_path}."
 
             run mkdir -p "$(dirname "${backup_path}")"
             run mv "${target}" "${backup_path}"
 
-            run ln -s "${file}" "${target}"
+            run ln -sfn "${file}" "${target}"
             log "linked (backed up): ${rel_path}."
         else
-            run ln -s "${file}" "${target}"
+            run ln -sfn "${file}" "${target}"
             log "linked: ${rel_path}."
         fi
-    done
+    done < <(find "${DOTFILES_DIR}" -type f -not -path "*/.git/*" -print0)
 
     log "installation complete. backups saved to: ${BACKUP_DIR}."
 }
@@ -123,25 +104,21 @@ install_dotfiles() {
 uninstall_dotfiles() {
     log "uninstalling dotfiles..."
 
-    find "${DOTFILES_DIR}" -type f -not -path "*/.git/*" -print0 | while IFS= read -r -d '' file; do
+    while IFS= read -r -d '' file; do
         local rel_path="${file#"${DOTFILES_DIR}"/}"
         local target="${HOME}/${rel_path}"
 
         if [[ -L "${target}" ]]; then
-            if [[ "$(realpath "${target}")" = "$(realpath "${file}")" ]]; then
+            if [[ "$(resolve_path "${target}")" = "$(resolve_path "${file}")" ]]; then
                 run rm "${target}"
                 log "removed symlink: ${rel_path}."
-
-                local target_dir
-                target_dir="$(dirname "${target}")"
-                run rmdir "${target_dir}" 2>/dev/null || true
             else
                 log "skipping: ${rel_path} (symlink points elsewhere)."
             fi
         else
             log "skipping: ${rel_path} (not a symlink)."
         fi
-    done
+    done < <(find "${DOTFILES_DIR}" -type f -not -path "*/.git/*" -print0)
 
     log "uninstallation complete."
 }
@@ -151,13 +128,13 @@ list_dotfiles() {
 }
 
 status_dotfiles() {
-    find "${DOTFILES_DIR}" -type f -not -path "*/.git/*" -print0 | while IFS= read -r -d '' file; do
+    while IFS= read -r -d '' file; do
         local rel_path="${file#"${DOTFILES_DIR}"/}"
         local target="${HOME}/${rel_path}"
 
         if [[ -L "${target}" ]]; then
             local real_target
-            if real_target=$(realpath "${target}" 2>/dev/null); then
+            if real_target=$(resolve_path "${target}" 2>/dev/null); then
                 if [[ "${real_target}" = "${file}" ]]; then
                     log "linked: ${rel_path}."
                 else
@@ -171,7 +148,7 @@ status_dotfiles() {
         else
             log "not installed: ${rel_path}."
         fi
-    done
+    done < <(find "${DOTFILES_DIR}" -type f -not -path "*/.git/*" -print0)
 }
 
 add_dotfile() {
@@ -185,19 +162,19 @@ add_dotfile() {
 
     if [[ -L "${source}" ]]; then
         local real_source
-        real_source=$(realpath "${source}")
+        real_source=$(resolve_path "${source}")
         if [[ "${real_source}" = "${target}" ]]; then
             die "file is already managed by dotfiles (symlink exists): ${file}."
         fi
     fi
 
     if [[ -e "${target}" ]] || [[ -L "${target}" ]]; then
-        war "file already exists in dotfiles: ${file}"
+        warn "file already exists in dotfiles: ${file}"
         if [[ "${DRY_RUN}" != "true" ]]; then
             printf "overwrite? [y/N] " >&2
             read -r
             if [[ ! "${REPLY}" =~ ^[Yy]$ ]]; then
-                log aborted
+                log "aborted"
                 return
             fi
         else
@@ -210,7 +187,7 @@ add_dotfile() {
 
     if [[ -L "${source}" ]]; then
         local real_source
-        real_source="$(realpath "${source}")"
+        real_source="$(resolve_path "${source}")"
 
         log "copying from symlink target: ${real_source}."
         run cp -f "${real_source}" "${target}"
@@ -219,20 +196,36 @@ add_dotfile() {
     fi
 
     log "added: ${file} to dotfiles."
-    auto_commit "add: ${file}"
+    git_commit "add: ${file}"
 }
 
 remove_dotfile() {
     local file="${1}"
     local target="${DOTFILES_DIR}/${file}"
+    local home_file="${HOME}/${file}"
 
     if [[ ! -e "${target}" ]]; then
         die "dotfile not found: ${target}."
     fi
 
+    if [[ -L "${home_file}" ]]; then
+        local target_real
+        local repo_real
+        target_real="$(resolve_path "${home_file}" 2>/dev/null || true)"
+        repo_real="$(resolve_path "${target}")"
+
+        if [[ "${target_real}" = "${repo_real}" ]]; then
+            run rm "${home_file}"
+            log "removed installed symlink: ${file}."
+        fi
+    fi
+
     run rm -f "${target}"
     log "removed: ${file} from dotfiles."
-    auto_commit "removed: ${file}"
+    if ! restore_backup_file "${file}"; then
+        warn "continuing without restoring backup"
+    fi
+    git_commit "removed: ${file}"
 }
 
 restore_backup() {
@@ -276,8 +269,13 @@ restore_backup() {
 
         run mkdir -p "$(dirname "${original_path}")"
 
+        if [[ -L "${original_path}" ]]; then
+            warn "skipping managed symlink: ${original_path}"
+            continue
+        fi
+
         if [[ -e "${original_path}" ]]; then
-            war "overwriting: ${original_path}."
+            warn "overwriting: ${original_path}."
         fi
 
         run cp -a "${backup_file}" "${original_path}"
@@ -286,6 +284,34 @@ restore_backup() {
     done
 
     log "restore complete."
+}
+
+restore_backup_file() {
+    local file="${1}"
+
+    local backup_file
+    backup_file="$(
+        find "${BACKUP_DIR}" \
+            -type f \
+            -path "*/${file}" \
+            | sort -r \
+            | head -n1
+    )"
+
+    if [[ -f "${backup_file}" ]]; then
+        run mkdir -p "$(dirname "${HOME}/${file}")"
+
+        if [[ -e "${HOME}/${file}" ]]; then
+            warn "file already exists, not restoring backup: ${file}"
+            return 1
+        fi
+
+        run cp -a "${backup_file}" "${HOME}/${file}"
+        log "restored: ${file}"
+    else
+        warn "no backup found for ${file}."
+        return 1
+    fi
 }
 
 require_git() {
@@ -370,27 +396,9 @@ git_commit() {
     fi
 }
 
-auto_commit() {
-    local message="${1}"
-
-    if [[ "${DRY_RUN}" = "true" ]]; then
-        dry "git add . && git commit -m ${message}"
-    else
-        if [[ -d "${DOTFILES_DIR}/.git" ]]; then
-            (
-                cd "${DOTFILES_DIR}"
-                git add .
-                if ! git diff --cached --quiet; then
-                    git commit -m "${message}"
-                fi
-            )
-        fi
-    fi
-}
-
 show_config() {
     local managed_count
-    managed_count=$(list_dotfiles | wc -l | tr -d ' ')
+    managed_count=$(find "${DOTFILES_DIR}" -type f -not -path "*/.git/*" | wc -l)
     local backup_count
     backup_count=$(find "${BACKUP_DIR}" -type f 2>/dev/null | wc -l | tr -d ' ')
     local git_repo
@@ -462,7 +470,7 @@ EOF
 }
 
 version() {
-    echo "dotfiles version 0.4.0"
+    echo "dotfiles version 0.4.1"
 }
 
 args() {
@@ -559,7 +567,7 @@ args() {
 
 main() {
     if [[ ! -d "${DOTFILES_DIR}" ]]; then
-        war "dotfiles directory not found in: ${DOTFILES_DIR}"
+        warn "dotfiles directory not found in: ${DOTFILES_DIR}"
         printf "create it now? [y/N] " >&2
         read -r
 
